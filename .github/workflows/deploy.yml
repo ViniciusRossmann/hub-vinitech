@@ -15,7 +15,7 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository_owner }}/hub-vinitech
+  IMAGE_NAME: viniciusrossmann/hub-vinitech
   APP_NAME: hub-vinitech
   CONTAINER_NAME: hub-vinitech-app
   NAMESPACE: apps
