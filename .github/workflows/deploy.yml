@@ -1,0 +1,100 @@
+name: Deploy viniciusnunes.tech
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: deploy-main
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/hub-vinitech
+  APP_NAME: hub-vinitech
+  CONTAINER_NAME: hub-vinitech-app
+  NAMESPACE: apps
+  K8S_DIR: .k8s
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Docker login GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & Push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          cache-to: type=inline
+
+      - name: Upload manifests to VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          passphrase: ${{ secrets.VPS_SSH_PASSPHRASE }}
+          source: ${{ env.K8S_DIR }}/
+          target: "~/deploy/${{ github.repository }}/"
+
+      - name: Deploy on k3s via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          passphrase: ${{ secrets.VPS_SSH_PASSPHRASE }}
+          script: |
+            set -euo pipefail
+
+            REPO_DIR=~/deploy/${{ github.repository }}
+            NS=${{ env.NAMESPACE }}
+            APP=${{ env.APP_NAME }}
+            CONTAINER=${{ env.CONTAINER_NAME }}
+            IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+            K8S_APP_DIR="$REPO_DIR/${{ env.K8S_DIR }}"
+
+            # 1) Namespace (idempotente)
+            kubectl get ns "$NS" >/dev/null 2>&1 || kubectl create ns "$NS"
+
+            # 2) imagePullSecret para GHCR (se imagem privada)
+            kubectl -n "$NS" create secret docker-registry ghcr-creds \
+              --docker-server=${{ env.REGISTRY }} \
+              --docker-username='${{ secrets.GHCR_USERNAME }}' \
+              --docker-password='${{ secrets.GHCR_READ_TOKEN }}' \
+              --dry-run=client -o yaml | kubectl apply -f -
+
+            # 3) Aplica TODOS os YAMLs da app (deployment, service, ingress)
+            kubectl -n "$NS" apply -f "$K8S_APP_DIR" --recursive
+
+            # 4) Garante que o Deployment existe antes de setar a imagem
+            if ! kubectl -n "$NS" get deploy "$APP" >/dev/null 2>&1; then
+              kubectl -n "$NS" apply -f "$K8S_APP_DIR" --recursive
+            fi
+
+            # 5) Atualiza a imagem para o SHA do commit
+            kubectl -n "$NS" set image deploy/"$APP" "$CONTAINER"="$IMAGE"
+
+            # 6) Espera o rollout e mostra estado
+            kubectl -n "$NS" rollout status deploy/"$APP" --timeout=180s
+            kubectl -n "$NS" get pods,svc,ing -o wide

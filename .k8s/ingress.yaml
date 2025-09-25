@@ -1,0 +1,32 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: hub-vinitech-ing
+  namespace: apps
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - viniciusnunes.tech
+        - www.viniciusnunes.tech
+  rules:
+    - host: viniciusnunes.tech
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: hub-vinitech-svc
+                port:
+                  number: 3000
+    - host: www.viniciusnunes.tech
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: hub-vinitech-svc
+                port:
+                  number: 3000
