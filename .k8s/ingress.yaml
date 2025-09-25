@@ -3,6 +3,9 @@ kind: Ingress
 metadata:
   name: hub-vinitech-ing
   namespace: apps
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web,websecure
+    traefik.ingress.kubernetes.io/router.middlewares: kube-system-https-redirect@kubernetescrd
 spec:
   ingressClassName: traefik
   tls:
