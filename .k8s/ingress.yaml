@@ -3,17 +3,14 @@ kind: Ingress
 metadata:
   name: hub-vinitech-ing
   namespace: apps
-  annotations:
-    traefik.ingress.kubernetes.io/router.entrypoints: web,websecure
-    traefik.ingress.kubernetes.io/router.middlewares: kube-system-https-redirect@kubernetescrd
 spec:
   ingressClassName: traefik
   tls:
     - hosts:
-        - viniciusnunes.tech
-        - www.viniciusnunes.tech
+        - viniciusnunes.dev.br
+        - www.viniciusnunes.dev.br
   rules:
-    - host: viniciusnunes.tech
+    - host: viniciusnunes.dev.br
       http:
         paths:
           - path: /
@@ -23,7 +20,7 @@ spec:
                 name: hub-vinitech-svc
                 port:
                   number: 3000
-    - host: www.viniciusnunes.tech
+    - host: www.viniciusnunes.dev.br
       http:
         paths:
           - path: /
