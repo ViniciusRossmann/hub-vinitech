@@ -1,20 +1,20 @@
 # hub-vinitech
 
-My hub site
+My hub site.
 
-## Publicação e deploy
+## Deploy automático
 
-O workflow `Publish image` publica no GHCR privado usando o `GITHUB_TOKEN` do
-próprio repositório. Builds da branch `main` produzem as tags do SHA do commit e
-`main`, para Linux amd64 e arm64. A execução é serializada para impedir que um
-build antigo sobrescreva o canal depois de um build mais novo.
+Commits em `main` publicam a imagem privada no GHCR. O Image Updater registra o
+digest em `platform/projects/hub-vinitech.yaml` no repositório privado
+[vps-infra](https://github.com/ViniciusRossmann/vps-infra), e o Argo CD Core aplica
+o estado no k3s. Não há SSH, kubeconfig ou token de deploy nos Secrets deste projeto.
 
-Manifestos de produção, versão da imagem e configuração de deploy ficam no
-repositório privado [vps-infra](https://github.com/ViniciusRossmann/vps-infra), em
-`apps/hub-vinitech`. O Image Updater registra o digest no Git e o Argo CD Core
-reconcilia o k3s. O pipeline termina na publicação; o estado do deploy é consultado
-no Argo/Kubernetes.
+Variáveis e referências de Secrets são declaradas nesse mesmo YAML. Os valores
+ficam nos Actions Secrets deste repositório. A plataforma detecta mudanças e
+sincroniza somente as chaves selecionadas, usando OIDC, com rollout automático.
+Uma imagem do mesmo SHA já publicada é reutilizada em atualizações de Secrets.
 
-O workflow não acessa a VPS por SSH e não precisa de kubeconfig nem secrets de
-deploy. Não reexecute workflows antigos de deploy por SSH. As etapas de adoção,
-ativação de imagens e rollback estão documentadas no repositório central.
+A configuração de produção preserva porta 3000, namespace compartilhado `apps`,
+cache temporário do Next.js e os domínios `viniciusnunes.dev.br` e
+`www.viniciusnunes.dev.br`. O sucesso do build é separado da saúde do rollout;
+consulte a documentação de operação em `vps-infra` para diagnóstico e rollback.
