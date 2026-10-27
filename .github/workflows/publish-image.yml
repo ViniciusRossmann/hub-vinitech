@@ -18,6 +18,9 @@ jobs:
   publish:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    outputs:
+      secret_names: ${{ steps.config.outputs.names }}
+      has_secrets: ${{ steps.config.outputs.has_secrets }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -59,8 +62,30 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
         run: python3 .github/scripts/image_state.py promote
-      - name: Synchronize selected runtime Secrets
+      - name: Discover selected runtime Secret names
+        id: config
         if: always() && steps.image.outputs.current == 'true'
+        run: python3 .github/scripts/vps_sync.py config
+  secrets:
+    needs: publish
+    if: always() && needs.publish.outputs.has_secrets == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        secret: ${{ fromJSON(needs.publish.outputs.secret_names) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Send one explicitly selected repository Secret
         env:
-          VPS_REPOSITORY_SECRETS: ${{ toJSON(secrets) }}
-        run: python3 .github/scripts/vps_sync.py
+          VPS_SECRET_NAME: ${{ matrix.secret }}
+          VPS_SECRET_VALUE: ${{ secrets[matrix.secret] }}
+        run: python3 .github/scripts/vps_sync.py stage
+  finalize:
+    needs: [publish, secrets]
+    if: always() && needs.publish.outputs.has_secrets == 'true' && needs.secrets.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Apply the complete Secret set atomically
+        run: python3 .github/scripts/vps_sync.py finalize

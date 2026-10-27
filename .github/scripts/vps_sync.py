@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Send only explicitly mapped repository Secrets, using a short-lived OIDC token."""
+"""Synchronize individually selected Actions Secrets with GitHub OIDC."""
 import json
 import os
 import sys
@@ -9,14 +9,12 @@ import urllib.parse
 import urllib.request
 
 
-def select_secrets(context, names):
-    normalized = {key.upper(): value for key, value in context.items()}
-    if any(name.startswith('GITHUB_') for name in names):
-        raise ValueError('Reserved GitHub credentials cannot be synchronized')
-    missing = sorted(set(names) - set(normalized))
-    if missing:
-        raise ValueError('Configure these repository Actions Secrets: ' + ', '.join(missing))
-    return {name: normalized[name] for name in names}
+def selected_secret(name, value, allowed):
+    if name.upper().startswith('GITHUB_') or name not in allowed:
+        raise ValueError('Secret name is not selected by this project')
+    if not value:
+        raise ValueError('Configure the repository Actions Secret: ' + name)
+    return {'name': name, 'value': value}
 
 
 def oidc(audience):
@@ -37,24 +35,50 @@ def call(endpoint, method, token, payload=None):
         return json.load(response)
 
 
+def outputs(names):
+    if os.environ.get('GITHUB_OUTPUT'):
+        with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+            output.write('names=' + json.dumps(names) + '\nhas_secrets=' + str(bool(names)).lower() + '\n')
+
+
 def main():
+    mode = sys.argv[1] if len(sys.argv) > 1 else 'config'
     base = os.environ.get('VPS_SECRETS_ENDPOINT', 'https://viniciusnunes.dev.br/.well-known/vps-secrets').rstrip('/')
     if not base.startswith('https://'):
         raise SystemExit('Secret synchronization requires HTTPS')
-    context = json.loads(os.environ.get('VPS_REPOSITORY_SECRETS', '{}'))
     for attempt in range(10):
         try:
             token = oidc(base)
-            if len(sys.argv) > 1 and sys.argv[1] == 'status':
+            if mode == 'status':
                 print(json.dumps(call(base + '/status', 'GET', token), indent=2))
                 return
             config = call(base + '/config', 'GET', token)
-            selected = select_secrets(context, config['secretNames'])
-            result = call(base + '/secrets', 'POST', token, {'secrets': selected})
-            print(f'Secrets synchronized for {result["project"]}; values_changed={result["changed"]}')
+            names = config['secretNames']
+            if any(name.upper().startswith('GITHUB_') for name in names):
+                raise ValueError('Reserved GitHub credentials cannot be synchronized')
+            if mode == 'config':
+                outputs(names)
+                if not names:
+                    call(base + '/secrets', 'POST', token, {'secrets': {}})
+                print('Selected Secret names: ' + ', '.join(names))
+                return
+            if mode == 'finalize':
+                result = call(base + '/finalize', 'POST', token, {})
+            else:
+                item = selected_secret(os.environ['VPS_SECRET_NAME'], os.environ['VPS_SECRET_VALUE'], names)
+                if mode == 'sync-single':
+                    if names != [item['name']]:
+                        raise ValueError('This workflow supports exactly one selected Secret')
+                    result = call(base + '/secrets', 'POST', token, {'secrets': {item['name']: item['value']}})
+                elif mode == 'stage':
+                    result = call(base + '/secret', 'POST', token, item)
+                else:
+                    raise ValueError('Unsupported synchronization command')
+            print('Secret synchronization completed for ' + result['project'])
             return
         except urllib.error.HTTPError as error:
-            if error.code == 404:
+            if error.code == 404 and mode == 'config':
+                outputs([])
                 print('Repository not registered yet. Commit its project file in vps-infra; the platform will start it automatically.')
                 return
             if error.code == 409:
@@ -62,11 +86,9 @@ def main():
                 if details.startswith('A newer workflow'):
                     print('Synchronization skipped: a newer workflow already applied this state.')
                     return
-                raise SystemExit('Secret synchronization conflicted with an externally managed Secret; inspect the application configuration.')
-            if error.code not in {429, 500, 502, 503, 504}:
+            if error.code not in {404, 429, 500, 502, 503, 504}:
                 raise SystemExit(f'Secret synchronization returned HTTP {error.code}; check the configured names and workflow identity.')
         except ValueError as error:
-            # This error only lists missing names, never the context or its values.
             raise SystemExit(str(error))
         except (urllib.error.URLError, TimeoutError):
             pass
